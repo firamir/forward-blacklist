@@ -1,6 +1,7 @@
 use teloxide::prelude::*;
-use teloxide_core::types::{MessageKind::NewChatMembers, MessageNewChatMembers, MessageOrigin};
+use teloxide_core::types::{MessageEntityKind, MessageEntityRef, MessageId, MessageKind::NewChatMembers, MessageNewChatMembers, MessageOrigin};
 use teloxide_core::{ApiError, RequestError};
+use teloxide_core::types::MessageEntityKind::CustomEmoji;
 
 #[tokio::main]
 async fn main() {
@@ -8,41 +9,96 @@ async fn main() {
     let bot = Bot::from_env();
     teloxide::repl(bot, handle_message).await;
 }
-
+//
 async fn handle_message(bot: Bot, msg: Message) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
+    let bot_id = bot.get_me().await.expect("").id;
 
-    if let NewChatMembers(MessageNewChatMembers { new_chat_members}) = &msg.kind {
-        for member in new_chat_members {
-            if member.id == bot.get_me().await?.id {
-                bot.send_message(chat_id, format!("assalamu aleykum everynyan don't forget to give me deletion perms @{}", msg.from.unwrap().username.unwrap())).await?;
-                return Ok(());
-            }
-        }
+    handle_bot_join(&bot, chat_id, &msg, bot_id).await?;
+
+    handle_message_violations(&bot, chat_id, &msg).await?;
+
+    Ok(())
+}
+
+async fn handle_message_violations(
+    bot: &Bot,
+    chat_id: ChatId,
+    msg: &Message
+) -> ResponseResult<()> {
+    if forward_has_blacklisted_title(msg) {
+        let response = msg.from
+            .as_ref()
+            .and_then(|user| user.username.as_ref())
+            .map_or_else(
+                || "чювачок без хендла тут незя dvach".into(),
+                |username| format!("@{username} але нельзя двач")
+            );
+
+        delete_message(bot, chat_id, msg.id, response).await?;
+        return Ok(());
     }
 
-    if let Some(MessageOrigin::Channel {chat, .. }) = msg.forward_origin() {
-        let title = chat.title().unwrap();
+    if let Some(emojis) = msg.parse_caption_entities() {
+        for emoji in emojis {
+            if let CustomEmoji { custom_emoji_id } = emoji.kind() {
+                if custom_emoji_id == "5359339614484061385" {
+                    let message = msg.from
+                        .as_ref()
+                        .and_then(|user| user.username.as_ref())
+                        .map_or_else(
+                            || "hello kent ). без алфавита двача. Спасибо".into(),
+                            |username| format!("@{username} привет... без алфавита двача ) ")
+                        );
 
-        if !(title.contains("Двач") || title == "Абу") { return Ok(()); }
-
-        let warn_message = match msg.from.and_then(|user| user.username) {
-            Some(username) => format!("@{} але нельзя двач", username),
-            None => "чювачок без хендла тут незя dvach".to_string(),
-        };
-
-        return match bot.delete_message(chat_id, msg.id).await {
-            Ok(_) => {
-                bot.send_message(chat_id, warn_message).await?;
-                Ok(())
+                    delete_message(bot, chat_id, msg.id, message).await?;
+                }
             }
-            Err(RequestError::Api(ApiError::MessageCantBeDeleted)) => {
-                bot.send_message(chat_id, "я нимагу удалять сабщеня admin дай permissions pls thanks").await?;
-                Ok(())
-            }
-            Err(e) => Err(e.into()),
         }
-
     }
     Ok(())
+}
+async fn handle_bot_join(
+    bot: &Bot,
+    chat_id: ChatId,
+    msg: &Message,
+    bot_user_id: UserId,
+) -> ResponseResult<()> {
+    if let NewChatMembers(ref members) = msg.kind {
+        if members.new_chat_members.iter().any(|u| u.id == bot_user_id) {
+            let inviter = msg.from.as_ref().and_then(|user| user.username.as_ref());
+            let response = inviter.map_or_else(
+                || "salam. deletion perms ty".into(),
+                |username| format!("@{username} delet permision pls")
+            );
+
+            bot.send_message(chat_id, response).await?;
+        }
+    }
+    Ok(())
+}
+
+fn forward_has_blacklisted_title(msg: &Message) -> bool { // #TODO
+    if let Some(origin) = msg.forward_origin() {
+        if let MessageOrigin::Channel { chat, .. } = origin {
+            if let Some(title) = chat.title() {
+                return title.contains("Двач") || title == "Абу";
+            }
+        }
+    }
+    false
+}
+
+async fn delete_message(bot: &Bot, chat_id: ChatId, message_id: MessageId, message: String) -> ResponseResult<()> {
+    match bot.delete_message(chat_id, message_id).await {
+        Ok(_) => {
+            bot.send_message(chat_id, message).await?;
+            Ok(())
+        }
+        Err(RequestError::Api(ApiError::MessageCantBeDeleted)) => {
+            bot.send_message(chat_id, "я нимагу удалять сабщеня admin дай permissions pls thanks").await?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
